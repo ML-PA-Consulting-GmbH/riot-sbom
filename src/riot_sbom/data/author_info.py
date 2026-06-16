@@ -1,10 +1,7 @@
 """
-Copyright (C) 2025 ML!PA Consulting GmbH
-
+SPDX-FileCopyrightText: 2025 ML!PA Consulting GmbH
 SPDX-License-Identifier: MIT
-
-Authors:
-    Daniel Lockau <daniel.lockau@ml-pa.com>
+Author: Daniel Lockau <daniel.lockau@ml-pa.com>
 """
 
 __all__ = ["AuthorDeclarationType", "AuthorInfo"]
