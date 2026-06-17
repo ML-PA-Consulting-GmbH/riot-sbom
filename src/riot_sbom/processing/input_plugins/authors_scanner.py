@@ -23,7 +23,9 @@ from riot_sbom.data.author_info import AuthorInfo, AuthorDeclarationType
 __all__ = ["AuthorsScanner"]
 
 
-_author_matcher = re.compile(r"(?P<tag>@?[Aa][Uu][Tt][Hh][Oo][Rr]:?[ \t]+)?(?P<name>\"?[^@\"<>]+\"?[ \t]+)?<?(?P<email>[a-zA-Z0-9\._-]+@[a-zA-Z0-9-]+\.[a-zA-Z]+)?>?",
+_author_matcher = re.compile(r"(?P<tag>@?[Aa][Uu][Tt][Hh][Oo][Rr]:?[ \t]+)?"\
+                            r"(?P<name>\"?[^@\"<>]+\"?[ \t]+)?<?"\
+                            r"(?P<email>[a-zA-Z0-9\._-]+@[a-zA-Z0-9-]+\.[a-zA-Z]+)?>?",
                              re.UNICODE)
 
 

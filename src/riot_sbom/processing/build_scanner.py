@@ -71,7 +71,8 @@ class BuildScanner(object):
         names.add(self._board_data['name'])
         names.update([mod['name'] for mod in self._external_module_data])
         if len(names) != len(self._external_module_data) + 2:
-            logger.info('Duplicate names found in set of application, board and external modules. Prepending board name to application name.')
+            logger.info('Duplicate names found in set of application, board and external modules. '\
+                'Prepending board name to application name.')
             self._app_data['name'] = f"APPLICATION_{self._app_data['name']}"
             self._board_data['name'] = f"BOARD_{self._board_data['name']}"
         with tempfile.TemporaryDirectory() as tempdir:
@@ -199,7 +200,8 @@ class BuildScanner(object):
                          "EXTERNAL_PKG_DIRS", "DEFAULT_MODULE", "USEMODULE", "RIOTPKG"])
         if required_keys - set(json_info.keys()):
             print(json_info.keys())
-            raise RuntimeError(f"Required keys are missing in the \"info-build-json\" output {required_keys - set(json_info.keys())}")
+            raise RuntimeError(f"Required keys are missing in the \"info-build-json\" output "\
+                f"{required_keys - set(json_info.keys())}")
         self._app_data = {
             "name": json_info["APPLICATION"],
             "source_dir": json_info["APPDIR"],

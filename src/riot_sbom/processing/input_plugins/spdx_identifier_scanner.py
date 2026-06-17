@@ -19,7 +19,8 @@ import unittest
 from riot_sbom.processing.plugin_type import Plugin
 from riot_sbom.data.license_info import LicenseInfo, LicenseDeclarationType
 
-_spdx_identifier_matcher = re.compile(r'SPDX-License-Identifier:[ \t]*(?P<license>[\w \t\(\)+\.-]{3,}?)[ \t]*(\*/)?$', re.UNICODE)
+_spdx_identifier_matcher = re.compile(
+    r'SPDX-License-Identifier:[ \t]*(?P<license>[\w \t\(\)+\.-]{3,}?)[ \t]*(\*/)?$', re.UNICODE)
 
 __all__ = ["SpdxIdsScanner"]
 
@@ -43,7 +44,8 @@ class SpdxIdsScanner(Plugin):
                                 license = license.strip()
                                 if not license.strip('()-.+'):
                                     # invalid or empty license statement
-                                    logger.warning(f"Found empty SPDX identifier in line: {line} of file: {file.path}")
+                                    logger.warning(f"Found empty SPDX identifier in line: {line} "\
+                                        f"of file: {file.path}")
                                     continue
                                 license_info = LicenseInfo(
                                     declaration_text=license,

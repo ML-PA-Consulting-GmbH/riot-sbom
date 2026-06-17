@@ -36,12 +36,18 @@ def _find_system_package_for_file(file_path: pathlib.Path) -> Dict[str, str] | N
             check=False,
         )
         if lsb_release_info.returncode != 0:
-            raise RuntimeError("lsb_release command failed. This plugin currently only supports Linux with lsb_release available.")
+            raise RuntimeError("lsb_release command failed. This plugin currently only "\
+                "supports Linux with lsb_release available.")
         # TODO add support for other distributions or package managers
-        lsb_map = {l[0].strip(): l[1].strip() for l in (line.split(":", 1) for line in lsb_release_info.stdout.splitlines()) if len(l) == 2}
+        lsb_map = {l[0].strip(): l[1].strip()
+                   for l in (line.split(":", 1)
+                             for line in lsb_release_info.stdout.splitlines())
+                   if len(l) == 2}
         if 'Distributor ID' not in lsb_map or 'Release' not in lsb_map:
             raise RuntimeError("lsb_release output does not contain expected fields.")
-        if lsb_map['Distributor ID'] == "Ubuntu":
+        if lsb_map['Distributor ID'] == "Ubuntu" or \
+        lsb_map['Distributor ID'] == "Neon" or \
+        lsb_map['Distributor ID'] == "Debian":
             # For Ubuntu, use dpkg to find the package
             dpkg_query = subprocess.run(
                 ["dpkg", "-S", str(file_path)],
@@ -58,7 +64,8 @@ def _find_system_package_for_file(file_path: pathlib.Path) -> Dict[str, str] | N
                 }
         else:
             raise NotImplementedError(
-                f"System package detection for this OS is not implemented. lsb_release output:\n{lsb_release_info.stdout}")
+                f"System package detection for this OS is not implemented. lsb_release output:\n"\
+                    f"{lsb_release_info.stdout}")
 
 
 class SystemPackageProvider(Plugin):

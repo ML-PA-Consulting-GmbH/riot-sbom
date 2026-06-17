@@ -20,7 +20,8 @@ from riot_sbom.processing.plugin_type import Plugin
 from riot_sbom.data.copyright_info import CopyrightInfo, CopyrightDeclarationType
 
 _copyright_matcher = re.compile(
-    r'(?P<tag>[ \t]*SPDX-FileCopyrightText:?|[ \t]*[Cc]opyright \([cC]\)|[ \t]*[Cc]opyright:?|[ \t]*\([cC]\))+[\t ]+(?P<years>[0-9]{4}[0-9, \t-]*)[ \t]+(?P<holder>.*)(\*/)?',
+    r'(?P<tag>[ \t]*SPDX-FileCopyrightText:?|[ \t]*[Cc]opyright \([cC]\)|[ \t]*[Cc]opyright:?' \
+    r'|[ \t]*\([cC]\))+[\t ]+(?P<years>[0-9]{4}[0-9, \t-]*)[ \t]+(?P<holder>.*)(\*/)?',
     re.UNICODE)
 
 __all__ = ["CopyrightsScanner"]

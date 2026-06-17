@@ -40,7 +40,8 @@ class ScancodeScanner(Plugin):
         return "scancode-scanner"
 
     def get_description(self):
-        return "Will use `scancode` to provide file details for authors, copyrights, licenses from a file's contents."
+        return "Will use `scancode` to provide file details for authors, copyrights,"\
+            "licenses from a file's contents."
 
     def run(self, app_info: AppInfo, _) -> AppInfo:
         logger.info("Scanning files with scancode")
@@ -56,7 +57,8 @@ class ScancodeScanner(Plugin):
                                                  if file.path.exists())])
         author_matcher = re.compile(r'([^<]*)? *(<.*>)?')
         copyright_matcher = re.compile(
-            r'(?P<tag>[ \t]*SPDX-FileCopyrightText:?|[ \t]*[Cc]opyright|[ \t]*\([cC]\))*[\t ]*(?P<years>[0-9]{4}[0-9, \t-]*)[ \t]+(?P<holder>.*)(\*/)?',
+            r'(?P<tag>[ \t]*SPDX-FileCopyrightText:?|[ \t]*[Cc]opyright|'\
+            r'[ \t]*\([cC]\))*[\t ]*(?P<years>[0-9]{4}[0-9, \t-]*)[ \t]+(?P<holder>.*)(\*/)?',
             re.UNICODE)
         scancode_output_transformed: Dict[Path, FileInfo] = {}
         logger.debug(f"Transforming scancode output (number of results: {len(file_scan_result)})",)
@@ -94,7 +96,8 @@ class ScancodeScanner(Plugin):
                             path_scan_result.copyrights.append(CopyrightInfo(
                                 holder=holder,
                                 years=years,
-                                declaration_type=CopyrightDeclarationType.TEXT_TAGGED if tag else CopyrightDeclarationType.TEXT_MATCHED,
+                                declaration_type=CopyrightDeclarationType.TEXT_TAGGED \
+                                    if tag else CopyrightDeclarationType.TEXT_MATCHED,
                                 tag=tag,
                                 url=None))
                 if (scan_result.get('files') and

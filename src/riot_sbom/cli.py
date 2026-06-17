@@ -18,18 +18,27 @@ import sys
 def main() -> int:
     from .processing import plugin_registry
     import argparse
-    parser = argparse.ArgumentParser(description='RIOT SBOM generator')
-    parser.add_argument('--app-dir', type=Path,
-                        help='Path to the directory of the application for which the SBOM should be built. `make -j` should build the application in that directory. Ignored if loading application information from a file, required otherwise.',
+    parser = argparse.ArgumentParser(description = 'RIOT SBOM generator')
+    parser.add_argument('--app-dir', type = Path,
+                        help='Path to the directory of the application for which the SBOM should '\
+                            'be built. `make -j` should build the application in that directory. '\
+                            'Ignored if loading application information from a file, '\
+                            'required otherwise.',
                         required=False)
     parser.add_argument('--save-app-info', type=Path,
-                        help='Path to the file where application information is saved in python pickle format. Will be ignored if loading application information from a file. This step will run after the application build and after each successfully executed input plugin.',
+                        help='Path to the file where application information is saved in python '\
+                            'pickle format. Will be ignored if loading application information '\
+                            'from a file. This step will run after the application build and '\
+                            'after each successfully executed input plugin.',
                         required=False)
     parser.add_argument('--load-app-info', type=Path,
-                        help='Path to the file from which application information is loaded in python pickle format. This will not execute an application build. All selected input plugins will be re-executed.',
+                        help='Path to the file from which application information is loaded in '\
+                            'python pickle format. This will not execute an application build. '\
+                            'All selected input plugins will be re-executed.',
                         required=False)
     parser.add_argument('--output-file-prefix', type=Path,
-                        help='Prefix of output files, without extension. Required if output plugins are selected.',
+                        help='Prefix of output files, without extension. Required if output '\
+                            'plugins are selected.',
                         required=False)
     parser.add_argument('--external-plugin-dirs', nargs='+', type=Path,
                         help='List of directories to search for loadable plugins.',
@@ -38,7 +47,10 @@ def main() -> int:
                         help='List all available plugins and exit.',
                         required=False)
     parser.add_argument('--plugin-pipeline', nargs='*', type=str,
-                        help='List of input processing plugins to use for extraction of information or output generation. Plugins are expected to overwrite content created by other plugins, so highest priority should go last for anything altering the application information.',
+                        help='List of input processing plugins to use for extraction of '\
+                            'information or output generation. Plugins are expected to overwrite '\
+                            'content created by other plugins, so highest priority should go last '\
+                            'for anything altering the application information.',
                         required=False,
                         default=[])
     args = parser.parse_args()
@@ -58,7 +70,8 @@ def main() -> int:
     non_existing_plugins = [x for x in args.plugin_pipeline
                             if x not in plugin_registry.get_plugin_names()]
     if non_existing_plugins:
-        logger.error(f"The following selected plugins are not available: {non_existing_plugins}. Please run with `--list-plugins` to list available plugins.")
+        logger.error(f"The following selected plugins are not available: {non_existing_plugins}. "\
+            f"Please run with `--list-plugins` to list available plugins.")
         return 1
     if args.load_app_info and args.app_dir:
         logger.error("Cannot specify both `--load-app-info` and `app-dir`. Please use one of them.")
@@ -70,17 +83,20 @@ def main() -> int:
         logger.error(f"Application directory {args.app_dir} does not contain a Makefile. Aborting.")
         return 1
     if args.save_app_info and not args.save_app_info.parent.is_dir():
-        logger.error(f"Cannot create output file {args.save_app_info}. Parent directory does not exist. Aborting.")
+        logger.error(f"Cannot create output file {args.save_app_info}. "\
+            f"Parent directory does not exist. Aborting.")
         return 1
     if args.load_app_info and not args.load_app_info.is_file():
-        logger.error(f"Cannot load application information from {args.load_app_info}. File does not exist. Aborting.")
+        logger.error(f"Cannot load application information from {args.load_app_info}. "\
+            f"File does not exist. Aborting.")
         return 1
 
     # Get application information
     if args.load_app_info:
         app_info = load_app_info(args.load_app_info)
     elif not args.app_dir:
-        logger.error("No application directory specified and no application information file to load. Please specify either `--app-dir` or `--load-app-info`.")
+        logger.error("No application directory specified and no application information file to "\
+            "load. Please specify either `--app-dir` or `--load-app-info`.")
         parser.print_help(sys.stderr)
         return 1
     else:

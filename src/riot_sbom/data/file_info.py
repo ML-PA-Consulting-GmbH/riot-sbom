@@ -64,7 +64,8 @@ class TestFileInfo(unittest.TestCase):
                              licenses=[], copyrights=None, authors=None)
         for digest_type in DigestType:
             expected_digest = hashlib.new(digest_type.value, file.read_bytes()).hexdigest()
-            self.assertEqual(file_info.digests[digest_type], expected_digest, f"Digest mismatch for {digest_type.value}")
+            self.assertEqual(file_info.digests[digest_type], expected_digest,
+                             f"Digest mismatch for {digest_type.value}")
 
 
 if __name__ == '__main__':
