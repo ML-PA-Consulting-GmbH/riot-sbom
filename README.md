@@ -8,6 +8,7 @@ Bill of Materials (SBOM) for RIOT OS based software projects.
 ## Installing
 
 Please build & install using [uv](https://docs.astral.sh/uv/).
+The project now supports both SPDX and CycloneDX output generation.
 
 ## Running
 
@@ -46,6 +47,18 @@ riot-sbom --load-app-info <path/to/app_info.pkl> \
                       system-package-provider infer-file-data-from-package spdx-generator
 ```
 
+To generate a CycloneDX SBOM in JSON format instead, use the
+`cyclonedx-generator` output plugin:
+
+```console
+riot-sbom --load-app-info <path/to/app_info.pkl> \
+    --output-file-prefix <path/to/outfilebase> \
+    --plugin-pipeline copyrights-scanner authors-scanner spdx-identifiers-scanner \
+                      system-package-provider infer-file-data-from-package cyclonedx-generator
+```
+
+This will write the output to `<path/to/outfilebase>.sbom.cyclonedx.json`.
+
 All tasks can be executed in one go of course, without saving
 intermediate information to the file system:
 
@@ -54,6 +67,15 @@ riot-sbom --app-dir <path-to-your-application> \
     --output-file-prefix <path/to/outfilebase> \
     --plugin-pipeline copyrights-scanner authors-scanner spdx-identifiers-scanner \
                       system-package-provider infer-file-data-from-package spdx-generator
+```
+
+CycloneDX generation can also be done in one go:
+
+```console
+riot-sbom --app-dir <path-to-your-application> \
+    --output-file-prefix <path/to/outfilebase> \
+    --plugin-pipeline copyrights-scanner authors-scanner spdx-identifiers-scanner \
+                      system-package-provider infer-file-data-from-package cyclonedx-generator
 ```
 
 Available default plugins can be listed via `riot-sbom --list-plugins`.

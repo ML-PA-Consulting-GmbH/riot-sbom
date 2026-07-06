@@ -9,6 +9,7 @@ requires-python = "<4.0,>=3.12"
 dependencies = [
     "spdx-tools<1.0.0,>=0.8.2",
     "scancode-toolkit<33.0.0,>=32.3.3",
+    "cyclonedx-python-lib>=11.11.0",
 ]
 
 [project.scripts]
