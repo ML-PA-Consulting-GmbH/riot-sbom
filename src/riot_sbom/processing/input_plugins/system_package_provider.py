@@ -14,6 +14,7 @@ import logging
 logger = logging.getLogger(__name__)
 import os
 import pathlib
+import shutil
 import subprocess
 from typing import Dict
 import unittest
@@ -22,53 +23,70 @@ from riot_sbom.processing.plugin_type import Plugin
 from riot_sbom.data.package_info import PackageInfo, PackageReference
 from riot_sbom.data.app_info import AppInfo
 
-def _find_system_package_for_file(file_path: pathlib.Path) -> Dict[str, str] | None:
+def _read_os_release() -> Dict[str, str]:
+    """
+    Read Linux distribution metadata from /etc/os-release if available.
+    """
+    os_release_path = pathlib.Path("/etc/os-release")
+    if not os_release_path.is_file():
+        return {}
+    os_release: Dict[str, str] = {}
+    with os_release_path.open("rt") as release_file:
+        for line in release_file:
+            if "=" not in line or line.startswith("#"):
+                continue
+            key, value = line.rstrip("\n").split("=", 1)
+            os_release[key] = value.strip('"')
+    return os_release
+
+
+def _find_system_package_for_file(file_path: pathlib.Path,
+                                  supplier: str | None,
+                                  version: str | None) -> Dict[str, str] | None:
     """
     Finds the system package for a given file path, if any.
     """
-    if os.name == "nt":
-        raise NotImplementedError("Microsoft Windows is not supported.")
-    elif os.name == "posix":
-        lsb_release_info = subprocess.run(
-            ["lsb_release", "-a"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if lsb_release_info.returncode != 0:
-            raise RuntimeError("lsb_release command failed. This plugin currently only "\
-                "supports Linux with lsb_release available.")
-        # TODO add support for other distributions or package managers
-        lsb_map = {l[0].strip(): l[1].strip()
-                   for l in (line.split(":", 1)
-                             for line in lsb_release_info.stdout.splitlines())
-                   if len(l) == 2}
-        if 'Distributor ID' not in lsb_map or 'Release' not in lsb_map:
-            raise RuntimeError("lsb_release output does not contain expected fields.")
-        if lsb_map['Distributor ID'] == "Ubuntu" or \
-        lsb_map['Distributor ID'] == "Neon" or \
-        lsb_map['Distributor ID'] == "Debian":
-            # For Ubuntu, use dpkg to find the package
-            dpkg_query = subprocess.run(
-                ["dpkg", "-S", str(file_path)],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            if dpkg_query.returncode == 0:
-                # TODO: add more info from `apt-cache show`
-                return {
-                    'name': dpkg_query.stdout.split(":")[0],
-                    'supplier': lsb_map['Distributor ID'],
-                    'version': lsb_map['Release']
-                }
-        else:
-            raise NotImplementedError(
-                f"System package detection for this OS is not implemented. lsb_release output:\n"\
-                    f"{lsb_release_info.stdout}")
+    dpkg_query = subprocess.run(
+        ["dpkg", "-S", str(file_path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if dpkg_query.returncode != 0:
+        return None
+    package_name = dpkg_query.stdout.split(":", 1)[0].strip()
+    if not package_name:
+        return None
+    package_info = {'name': package_name}
+    if supplier:
+        package_info['supplier'] = supplier
+    if version:
+        package_info['version'] = version
+    return package_info
 
 
 class SystemPackageProvider(Plugin):
+    def __init__(self):
+        self._enabled = False
+        self._supplier: str | None = None
+        self._version: str | None = None
+        self._init_package_provider()
+
+    def _init_package_provider(self):
+        if os.name == "nt":
+            logger.info("SystemPackageProvider is disabled: Microsoft Windows is not supported.")
+            return
+        if os.name != "posix":
+            logger.info("SystemPackageProvider is disabled: unsupported os.name=%s", os.name)
+            return
+        if shutil.which("dpkg") is None:
+            logger.info("SystemPackageProvider is disabled: dpkg was not found in PATH.")
+            return
+        os_release = _read_os_release()
+        self._supplier = os_release.get("NAME", None)
+        self._version = os_release.get("VERSION_ID", None)
+        self._enabled = True
+
     def get_name(self):
         return "system-package-provider"
 
@@ -76,9 +94,16 @@ class SystemPackageProvider(Plugin):
         return "Will attempt to provide system package references for source files with no package relation."
 
     def run(self, app_info: AppInfo, _):
+        if not self._enabled:
+            logger.debug("SystemPackageProvider is disabled. Skipping package resolution.")
+            return app_info
         for file in app_info.files:
             if not file.package and file.path.exists():
-                system_package = _find_system_package_for_file(file.path)
+                system_package = _find_system_package_for_file(
+                    file.path,
+                    self._supplier,
+                    self._version,
+                )
                 if system_package:
                     logger.debug(f"Found system package '{system_package}' for file: {file.path}")
                     package_ref = PackageReference(system_package['name'], pathlib.Path("/"))
@@ -101,8 +126,8 @@ class SystemPackageProvider(Plugin):
 
 class TestSystemPackageProvider(unittest.TestCase):
     def test_find_system_package_for_file(self):
-        # This test assumes that the file exists and is part of a package.
-        # Adjust the file path as necessary for your system.
+        if os.name != "posix" or shutil.which("dpkg") is None:
+            self.skipTest("This test requires dpkg on a POSIX system.")
         ls_location = subprocess.run(
             ["which", "ls"],
             capture_output=True,
@@ -113,7 +138,7 @@ class TestSystemPackageProvider(unittest.TestCase):
                 or not pathlib.Path(ls_location.stdout.strip()).exists()):
             self.skipTest("The 'ls' command was not found on this system.")
         test_file = pathlib.Path(ls_location.stdout.strip())
-        package_info = _find_system_package_for_file(test_file)
+        package_info = _find_system_package_for_file(test_file, "test-supplier", "test-version")
         self.assertIsNotNone(package_info)
         if not package_info:
             # make linter happy
@@ -121,12 +146,16 @@ class TestSystemPackageProvider(unittest.TestCase):
         self.assertIn('name', package_info)
         self.assertIn('supplier', package_info)
         self.assertIn('version', package_info)
+        self.assertEqual(package_info['supplier'], "test-supplier")
+        self.assertEqual(package_info['version'], "test-version")
 
     def test_no_system_package_found(self):
+        if os.name != "posix" or shutil.which("dpkg") is None:
+            self.skipTest("This test requires dpkg on a POSIX system.")
         import tempfile
         with tempfile.NamedTemporaryFile() as temp_file:
             test_file = pathlib.Path(temp_file.name)
-            package_info = _find_system_package_for_file(test_file)
+            package_info = _find_system_package_for_file(test_file, None, None)
             self.assertIsNone(package_info, "Expected no system package to be found for a temporary file.")
 
 
