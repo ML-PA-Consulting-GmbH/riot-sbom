@@ -22,6 +22,7 @@ import unittest
 from riot_sbom.processing.plugin_type import Plugin
 from riot_sbom.data.package_info import PackageInfo, PackageReference
 from riot_sbom.data.app_info import AppInfo
+from riot_sbom.util import purl_derivation
 
 def _read_os_release() -> Dict[str, str]:
     """
@@ -117,6 +118,10 @@ class SystemPackageProvider(Plugin):
                             download_url=None,
                             licenses=None,
                             copyrights=None,
+                            purl=purl_derivation.derive_debian_purl(
+                                system_package['name'],
+                                system_package.get('version', None)
+                            ),
                         )
                     file.package = package_ref
                 else:

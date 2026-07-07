@@ -28,6 +28,7 @@ if __name__ == "__main__":
     from riot_sbom.data.license_info import LicenseInfo, LicenseDeclarationType
     from riot_sbom.util import text_processing
     from riot_sbom.util import git_queries
+    from riot_sbom.util import purl_derivation
 else:
     from ..data.app_info import AppInfo
     from ..data.package_info import PackageInfo, PackageReference
@@ -36,6 +37,7 @@ else:
     from ..data.license_info import LicenseInfo, LicenseDeclarationType
     from ..util import text_processing
     from ..util import git_queries
+    from ..util import purl_derivation
 
 __all__ = ["BuildScanner"]
 
@@ -100,7 +102,8 @@ class BuildScanner(object):
             download_url=None,
             copyrights=None,
             authors=None,
-            supplier=None
+            supplier=None,
+            purl=purl_derivation.derive_purl(self._app_data['name'], None, None)
         )
         riot_package=PackageInfo(
             name='RIOT OS',
@@ -113,7 +116,8 @@ class BuildScanner(object):
             download_url=CheckedUrl(self._riot_data['url']),
             copyrights=None,
             authors=None,
-            supplier=None
+            supplier=None,
+            purl=purl_derivation.derive_purl('RIOT OS', self._riot_data['version'], self._riot_data['url'])
         )
         board_package=PackageInfo(
             name=self._board_data['name'],
@@ -123,7 +127,8 @@ class BuildScanner(object):
             download_url=None,
             copyrights=None,
             authors=None,
-            supplier=None)
+            supplier=None,
+            purl=purl_derivation.derive_purl(self._board_data['name'], None, None))
         app_info = AppInfo(self._app_data['build_dir'],
                            PackageReference.from_package_info(app_package),
                            PackageReference.from_package_info(riot_package),
@@ -142,7 +147,8 @@ class BuildScanner(object):
                 download_url=None,
                 copyrights=None,
                 authors=None,
-                supplier=None
+                supplier=None,
+                purl=purl_derivation.derive_purl(ext_mod['name'], None, None)
             )
             app_info.packages[PackageReference.from_package_info(pkg)] = pkg
         # add RIOT included packages
@@ -160,7 +166,8 @@ class BuildScanner(object):
                 authors=None,
                 supplier=("RIOT OS"
                           if pkg['source_dir'].startswith(self._riot_data['source_dir'])
-                          else None)
+                          else None),
+                purl=purl_derivation.derive_purl(pkg['name'], pkg['version'], pkg['url'])
             )
             app_info.packages[PackageReference.from_package_info(pkg)] = pkg
         # add all files from build trace
