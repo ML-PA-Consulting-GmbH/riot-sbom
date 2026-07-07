@@ -20,6 +20,7 @@ import pathlib
 import re
 import tempfile
 import unittest
+import urllib.parse
 
 from cyclonedx.contrib.license.factories import LicenseFactory
 from cyclonedx.model import (
@@ -37,6 +38,7 @@ from cyclonedx.model.license import LicenseAcknowledgement
 from cyclonedx.model.tool import Tool
 from cyclonedx.output import make_outputter
 from cyclonedx.schema import OutputFormat, SchemaVersion
+from packageurl import PackageURL
 
 from riot_sbom.data.app_info import AppInfo
 from riot_sbom.data.author_info import AuthorInfo, AuthorDeclarationType
@@ -140,6 +142,7 @@ class CycloneDxBuilder:
             type=component_type,
             bom_ref=self._make_bom_ref("package", package_info.name, package_info.source_dir),
             version=package_info.version,
+            purl=self._derive_purl(package_info),
             supplier=self._make_supplier(package_info.supplier),
             authors=self._make_contacts(package_info.authors),
             licenses=self._make_licenses(package_info.licenses),
@@ -283,6 +286,61 @@ class CycloneDxBuilder:
         normalized = normalized.strip("-") or name
         return f"riot-sbom-{kind}-{normalized}"
 
+    def _derive_purl(self, package_info: PackageInfo) -> PackageURL | None:
+        if package_info.purl:
+            try:
+                return PackageURL.from_string(package_info.purl)
+            except ValueError:
+                logger.warning("Could not parse explicit PURL '%s'. Falling back to derivation.", package_info.purl)
+
+        inferred_purl = self._derive_vcs_purl(package_info)
+        if inferred_purl is not None:
+            return inferred_purl
+
+        return PackageURL(
+            type="generic",
+            name=package_info.name,
+            version=package_info.version,
+        )
+
+    def _derive_vcs_purl(self, package_info: PackageInfo) -> PackageURL | None:
+        if package_info.download_url is None:
+            return None
+
+        parsed_url = urllib.parse.urlsplit(package_info.download_url.get())
+        host = parsed_url.hostname.lower() if parsed_url.hostname else ""
+        path_parts = [part for part in parsed_url.path.split("/") if part]
+
+        if host in {"github.com", "www.github.com"} and len(path_parts) >= 2:
+            namespace = path_parts[0]
+            repo_name = path_parts[1]
+            return PackageURL(
+                type="github",
+                namespace=namespace,
+                name=self._normalize_repo_name(repo_name),
+                version=package_info.version,
+            )
+
+        if host in {"gitlab.com", "www.gitlab.com"}:
+            repo_parts = []
+            for path_part in path_parts:
+                if path_part in {"-", "archive", "releases", "raw", "uploads", "repository"}:
+                    break
+                repo_parts.append(path_part)
+            if len(repo_parts) >= 2:
+                return PackageURL(
+                    type="gitlab",
+                    namespace="/".join(repo_parts[:-1]),
+                    name=self._normalize_repo_name(repo_parts[-1]),
+                    version=package_info.version,
+                )
+
+        return None
+
+    @staticmethod
+    def _normalize_repo_name(repo_name: str) -> str:
+        return repo_name.removesuffix(".git")
+
     def _make_xs_uri(self, url: CheckedUrl | None) -> XsUri | None:
         if url is None:
             return None
@@ -364,6 +422,7 @@ class TestCycloneDxGenerator(unittest.TestCase):
                 ],
                 source_dir=app_source_dir,
                 supplier="Example Supplier",
+                purl="pkg:generic/example-app@1.0.0",
             )
             riot_package = PackageInfo(
                 name="riot",
@@ -397,7 +456,7 @@ class TestCycloneDxGenerator(unittest.TestCase):
                     )
                 ],
                 copyrights=[],
-                download_url=CheckedUrl("https://example.com/example-pkg.tar.gz"),
+                download_url=CheckedUrl("https://github.com/example-org/example-pkg/archive/refs/tags/v2.0.0.tar.gz"),
                 authors=[],
                 source_dir=dep_source_dir,
                 supplier="Example Supplier",
@@ -450,10 +509,40 @@ class TestCycloneDxGenerator(unittest.TestCase):
             self.assertEqual(output["bomFormat"], "CycloneDX")
             self.assertEqual(output["metadata"]["component"]["type"], "application")
             self.assertEqual(output["metadata"]["component"]["name"], "example-app")
-            component_names = {component["name"] for component in output.get("components", [])}
+            self.assertEqual(output["metadata"]["component"]["purl"], "pkg:generic/example-app@1.0.0")
+
+            components_by_name = {
+                component["name"]: component for component in output.get("components", [])
+            }
+            component_names = set(components_by_name)
             self.assertIn("example-pkg", component_names)
             self.assertIn("main.c", component_names)
             self.assertIn("lib.c", component_names)
+            self.assertEqual(
+                components_by_name["example-pkg"]["purl"],
+                "pkg:github/example-org/example-pkg@2.0.0",
+            )
+            self.assertNotIn("purl", components_by_name["main.c"])
+            self.assertNotIn("purl", components_by_name["lib.c"])
+
+    def test_derive_purl_prefers_github_inference(self):
+        builder = CycloneDxBuilder()
+
+        package_info = PackageInfo(
+            name="example-pkg",
+            version="2.0.0",
+            licenses=None,
+            copyrights=None,
+            download_url=CheckedUrl("https://github.com/example-org/example-pkg/releases/tag/v2.0.0"),
+            authors=None,
+            source_dir=None,
+            supplier=None,
+        )
+
+        purl = builder._derive_purl(package_info)
+
+        self.assertIsNotNone(purl)
+        self.assertEqual(str(purl), "pkg:github/example-org/example-pkg@2.0.0")
 
 
 if __name__ == "__main__":

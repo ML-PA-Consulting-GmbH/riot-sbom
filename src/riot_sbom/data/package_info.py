@@ -27,6 +27,7 @@ class PackageInfo:
     download_url: CheckedUrl | None
     licenses: List[LicenseInfo] | None
     copyrights: List[CopyrightInfo] | None
+    purl: str | None = None
 
 
 class PackageReference:
