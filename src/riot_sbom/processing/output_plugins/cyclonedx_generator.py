@@ -55,11 +55,19 @@ logger = logging.getLogger(__name__)
 
 
 class CycloneDxBuilder:
-    def __init__(self, schema_version: str = "1.6", include_files: bool = False):
+    def __init__(
+        self,
+        schema_version: str = "1.6",
+        include_files: bool = False,
+        expand_alternate_purls: bool = False,
+        alternate_purl_name_style: str = "ecosystem-project",
+    ):
         self._license_factory = LicenseFactory()
         self._package_components: dict[PackageReference, Component] = {}
         self._schema_version = schema_version
         self._include_files = include_files
+        self._expand_alternate_purls = expand_alternate_purls
+        self._alternate_purl_name_style = alternate_purl_name_style
 
     def build(self, app_info: AppInfo) -> Bom:
         app_package = app_info.packages[app_info.app_package_ref]
@@ -95,7 +103,20 @@ class CycloneDxBuilder:
             self._package_components[package_ref] = component
             bom.components.add(component)
 
-        root_dependencies: list[Component] = list(self._package_components.values())
+        alternate_purl_components: list[Component] = []
+        if self._expand_alternate_purls:
+            for package_ref, package_info in app_info.packages.items():
+                if package_ref == app_info.app_package_ref:
+                    continue
+                canonical_component = self._package_components.get(package_ref)
+                if canonical_component is None:
+                    continue
+                alt_components = self._make_alternate_purl_components(canonical_component, package_info)
+                for alt_comp in alt_components:
+                    bom.components.add(alt_comp)
+                    alternate_purl_components.append(alt_comp)
+
+        root_dependencies: list[Component] = list(self._package_components.values()) + alternate_purl_components
         package_file_dependencies: dict[PackageReference, list[Component]] = {}
         for file_info in app_info.files:
             if not self._include_files:
@@ -147,6 +168,9 @@ class CycloneDxBuilder:
             properties.append(Property(name="riot_sbom:origin_distro_id", value=package_info.origin_distro_id))
         if package_info.host_distro_name:
             properties.append(Property(name="riot_sbom:host_distro_name", value=package_info.host_distro_name))
+        if package_info.alternate_purls:
+            for alt_purl in package_info.alternate_purls:
+                properties.append(Property(name="riot_sbom:alternate-purl", value=alt_purl))
         return Component(
             name=package_info.name,
             type=component_type,
@@ -297,6 +321,67 @@ class CycloneDxBuilder:
         normalized = normalized.strip("-") or name
         return f"riot-sbom-{kind}-{normalized}"
 
+    def _make_alternate_purl_components(
+        self,
+        canonical_component: Component,
+        package_info: PackageInfo,
+    ) -> list[Component]:
+        if not package_info.alternate_purls:
+            return []
+        primary_purl = self._derive_purl(package_info)
+        primary_purl_str = str(primary_purl) if primary_purl else None
+        canonical_bom_ref = (
+            canonical_component.bom_ref.value
+            if hasattr(canonical_component.bom_ref, "value")
+            else str(canonical_component.bom_ref)
+        )
+        result = []
+        for alt_purl_str in package_info.alternate_purls:
+            if not alt_purl_str:
+                continue
+            try:
+                alt_purl = PackageURL.from_string(alt_purl_str)
+            except ValueError:
+                logger.warning(
+                    "Skipping malformed alternate PURL '%s' for package '%s'.",
+                    alt_purl_str,
+                    package_info.name,
+                )
+                continue
+            if primary_purl_str and str(alt_purl) == primary_purl_str:
+                logger.debug(
+                    "Alternate PURL '%s' matches primary PURL for '%s'. Skipping duplicate.",
+                    alt_purl_str,
+                    package_info.name,
+                )
+                continue
+            bom_ref_suffix = f"{alt_purl.type}-{(alt_purl.namespace or '').replace('/', '-')}"
+            bom_ref_suffix = re.sub(r"[^A-Za-z0-9._-]+", "-", bom_ref_suffix).strip("-")
+            alt_bom_ref = f"{canonical_bom_ref}-alt-{bom_ref_suffix}"
+            alt_name = self._make_alternate_purl_component_name(package_info.name, alt_purl)
+            properties = [
+                Property(name="riot_sbom:canonical-bom-ref", value=canonical_bom_ref),
+                Property(name="riot_sbom:alternate-purl", value=alt_purl_str),
+            ]
+            duplicate = Component(
+                name=alt_name,
+                type=ComponentType.LIBRARY,
+                bom_ref=alt_bom_ref,
+                version=package_info.version,
+                purl=alt_purl,
+                properties=properties,
+            )
+            result.append(duplicate)
+        return result
+
+    def _make_alternate_purl_component_name(self, base_name: str, purl: PackageURL) -> str:
+        if self._alternate_purl_name_style == "ecosystem-project":
+            suffix_parts = [purl.type]
+            if purl.namespace:
+                suffix_parts.append(purl.namespace)
+            return f"{base_name} [{'/'.join(suffix_parts)}]"
+        return base_name
+
     def _derive_purl(self, package_info: PackageInfo) -> PackageURL | None:
         if package_info.purl:
             try:
@@ -376,6 +461,8 @@ class CycloneDxGenerator(Plugin):
     def __init__(self):
         self._schema_version: str = "1.6"
         self._include_files: bool = False
+        self._expand_alternate_purls: bool = False
+        self._alternate_purl_name_style: str = "ecosystem-project"
 
     def get_name(self):
         return "cyclonedx-generator"
@@ -395,6 +482,22 @@ class CycloneDxGenerator(Plugin):
                 "default": False,
                 "help": "Include file-level components in the CycloneDX BOM.",
             },
+            "expand-alternate-purls": {
+                "action": "store_true",
+                "default": False,
+                "help": (
+                    "Scanner mode: emit one synthetic duplicate component per alternate PURL "
+                    "for each non-root library package, linked back to the canonical component."
+                ),
+            },
+            "alternate-purl-name-style": {
+                "choices": ["ecosystem-project"],
+                "default": "ecosystem-project",
+                "help": (
+                    "Naming style for synthetic alternate-PURL components "
+                    "(default: ecosystem-project)."
+                ),
+            },
         }
 
     def configure(self, **kwargs) -> None:
@@ -402,6 +505,10 @@ class CycloneDxGenerator(Plugin):
             self._schema_version = kwargs["schema_version"]
         if "include_files" in kwargs:
             self._include_files = bool(kwargs["include_files"])
+        if "expand_alternate_purls" in kwargs:
+            self._expand_alternate_purls = bool(kwargs["expand_alternate_purls"])
+        if "alternate_purl_name_style" in kwargs:
+            self._alternate_purl_name_style = kwargs["alternate_purl_name_style"]
 
     def run(self, app_info: AppInfo, output_file_prefix: pathlib.Path | None) -> AppInfo:
         logger.info("Generating CycloneDX document")
@@ -413,6 +520,8 @@ class CycloneDxGenerator(Plugin):
         builder = CycloneDxBuilder(
             schema_version=self._schema_version,
             include_files=self._include_files,
+            expand_alternate_purls=self._expand_alternate_purls,
+            alternate_purl_name_style=self._alternate_purl_name_style,
         )
         bom = builder.build(app_info)
         outputter = make_outputter(bom, OutputFormat.JSON, schema_version_enum)
@@ -812,6 +921,249 @@ class TestCycloneDxGenerator(unittest.TestCase):
             self.assertEqual(props.get("riot_sbom:host_distro_id"), "neon")
             self.assertEqual(props.get("riot_sbom:origin_distro_id"), "ubuntu")
             self.assertEqual(props.get("riot_sbom:host_distro_name"), "KDE neon")
+
+    def test_alternate_purls_canonical_properties(self):
+        """Alternate PURLs appear as riot_sbom:alternate-purl properties in canonical mode."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_dir_path = pathlib.Path(temp_dir)
+            app_source_dir = temp_dir_path / "app"
+            dep_source_dir = temp_dir_path / "dep"
+            app_source_dir.mkdir()
+            dep_source_dir.mkdir()
+
+            app_package = PackageInfo(
+                name="my-app",
+                version="1.0.0",
+                licenses=None,
+                copyrights=None,
+                download_url=None,
+                authors=None,
+                source_dir=app_source_dir,
+                supplier=None,
+                purl="pkg:generic/my-app@1.0.0",
+            )
+            dep_package = PackageInfo(
+                name="libfoo",
+                version="3.0",
+                licenses=None,
+                copyrights=None,
+                download_url=None,
+                authors=None,
+                source_dir=dep_source_dir,
+                supplier=None,
+                purl="pkg:deb/ubuntu/libfoo@3.0",
+                alternate_purls=["pkg:conan/libfoo@3.0", "pkg:generic/libfoo@3.0"],
+            )
+            app_info = AppInfo(
+                build_dir=temp_dir_path / "build",
+                app_package_ref=PackageReference.from_package_info(app_package),
+                riot_package_ref=None,
+                board_package_ref=None,
+                packages={
+                    PackageReference.from_package_info(app_package): app_package,
+                    PackageReference.from_package_info(dep_package): dep_package,
+                },
+                files=[],
+            )
+
+            plugin = CycloneDxGenerator()
+            output_file_prefix = temp_dir_path / "test_alt_canonical"
+            plugin.run(app_info, output_file_prefix)
+
+            output = json.loads(
+                output_file_prefix.with_suffix(".sbom.cyclonedx.json").read_text()
+            )
+            components_by_name = {c["name"]: c for c in output.get("components", [])}
+            self.assertIn("libfoo", components_by_name)
+            # Canonical mode: no extra duplicate components
+            self.assertEqual(len(components_by_name), 1)
+            alt_purl_props = [
+                p["value"]
+                for p in components_by_name["libfoo"].get("properties", [])
+                if p["name"] == "riot_sbom:alternate-purl"
+            ]
+            self.assertIn("pkg:conan/libfoo@3.0", alt_purl_props)
+            self.assertIn("pkg:generic/libfoo@3.0", alt_purl_props)
+
+    def test_alternate_purls_scanner_mode_duplicates(self):
+        """Scanner mode emits one duplicate component per alternate PURL."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_dir_path = pathlib.Path(temp_dir)
+            app_source_dir = temp_dir_path / "app"
+            dep_source_dir = temp_dir_path / "dep"
+            app_source_dir.mkdir()
+            dep_source_dir.mkdir()
+
+            app_package = PackageInfo(
+                name="my-app",
+                version="1.0.0",
+                licenses=None,
+                copyrights=None,
+                download_url=None,
+                authors=None,
+                source_dir=app_source_dir,
+                supplier=None,
+                purl="pkg:generic/my-app@1.0.0",
+            )
+            dep_package = PackageInfo(
+                name="libfoo",
+                version="3.0",
+                licenses=None,
+                copyrights=None,
+                download_url=None,
+                authors=None,
+                source_dir=dep_source_dir,
+                supplier=None,
+                purl="pkg:deb/ubuntu/libfoo@3.0",
+                alternate_purls=["pkg:conan/libfoo@3.0"],
+            )
+            app_info = AppInfo(
+                build_dir=temp_dir_path / "build",
+                app_package_ref=PackageReference.from_package_info(app_package),
+                riot_package_ref=None,
+                board_package_ref=None,
+                packages={
+                    PackageReference.from_package_info(app_package): app_package,
+                    PackageReference.from_package_info(dep_package): dep_package,
+                },
+                files=[],
+            )
+
+            plugin = CycloneDxGenerator()
+            plugin.configure(expand_alternate_purls=True)
+            output_file_prefix = temp_dir_path / "test_alt_scanner"
+            plugin.run(app_info, output_file_prefix)
+
+            output = json.loads(
+                output_file_prefix.with_suffix(".sbom.cyclonedx.json").read_text()
+            )
+            components_by_name = {c["name"]: c for c in output.get("components", [])}
+            # Canonical component still present
+            self.assertIn("libfoo", components_by_name)
+            # Duplicate for conan alternate
+            duplicate_name = "libfoo [conan]"
+            self.assertIn(duplicate_name, components_by_name)
+            self.assertEqual(components_by_name[duplicate_name]["purl"], "pkg:conan/libfoo@3.0")
+            # Back-reference to canonical
+            dup_props = {
+                p["name"]: p["value"]
+                for p in components_by_name[duplicate_name].get("properties", [])
+            }
+            canonical_bom_ref = components_by_name["libfoo"]["bom-ref"]
+            self.assertEqual(dup_props.get("riot_sbom:canonical-bom-ref"), canonical_bom_ref)
+            # Duplicate appears in root dependencies
+            root_deps = output.get("dependencies", [])
+            root_dep_refs = next(
+                (d["dependsOn"] for d in root_deps if d["ref"] == output["metadata"]["component"]["bom-ref"]),
+                [],
+            )
+            dup_bom_ref = components_by_name[duplicate_name]["bom-ref"]
+            self.assertIn(dup_bom_ref, root_dep_refs)
+
+    def test_alternate_purls_scanner_mode_suffix_naming(self):
+        """ecosystem-project naming style appends type and namespace as suffix."""
+        builder = CycloneDxBuilder(expand_alternate_purls=True, alternate_purl_name_style="ecosystem-project")
+        purl = PackageURL.from_string("pkg:deb/debian/libssl@3.0")
+        name = builder._make_alternate_purl_component_name("libssl", purl)
+        self.assertEqual(name, "libssl [deb/debian]")
+
+    def test_alternate_purls_scanner_no_root_duplicates(self):
+        """Root (application) component is not expanded in scanner mode."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_dir_path = pathlib.Path(temp_dir)
+            app_source_dir = temp_dir_path / "app"
+            app_source_dir.mkdir()
+
+            app_package = PackageInfo(
+                name="my-app",
+                version="1.0.0",
+                licenses=None,
+                copyrights=None,
+                download_url=None,
+                authors=None,
+                source_dir=app_source_dir,
+                supplier=None,
+                purl="pkg:generic/my-app@1.0.0",
+                alternate_purls=["pkg:conan/my-app@1.0.0"],
+            )
+            app_info = AppInfo(
+                build_dir=temp_dir_path / "build",
+                app_package_ref=PackageReference.from_package_info(app_package),
+                riot_package_ref=None,
+                board_package_ref=None,
+                packages={PackageReference.from_package_info(app_package): app_package},
+                files=[],
+            )
+
+            plugin = CycloneDxGenerator()
+            plugin.configure(expand_alternate_purls=True)
+            output_file_prefix = temp_dir_path / "test_no_root_dup"
+            plugin.run(app_info, output_file_prefix)
+
+            output = json.loads(
+                output_file_prefix.with_suffix(".sbom.cyclonedx.json").read_text()
+            )
+            components = output.get("components", [])
+            # No library duplicates for the root application
+            self.assertEqual(len(components), 0)
+
+    def test_alternate_purls_skip_malformed(self):
+        """Malformed alternate PURLs are skipped with a warning, not raising."""
+        builder = CycloneDxBuilder(expand_alternate_purls=True)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_dir_path = pathlib.Path(temp_dir)
+            dep_source_dir = temp_dir_path / "dep"
+            dep_source_dir.mkdir()
+            canonical = Component(
+                name="libfoo",
+                type=ComponentType.LIBRARY,
+                bom_ref="riot-sbom-package-dep-dep",
+                version="1.0",
+            )
+            package_info = PackageInfo(
+                name="libfoo",
+                version="1.0",
+                licenses=None,
+                copyrights=None,
+                download_url=None,
+                authors=None,
+                source_dir=dep_source_dir,
+                supplier=None,
+                purl="pkg:deb/ubuntu/libfoo@1.0",
+                alternate_purls=["not-a-valid-purl", "pkg:conan/libfoo@1.0"],
+            )
+            results = builder._make_alternate_purl_components(canonical, package_info)
+            # Malformed entry skipped; valid one still returned
+            self.assertEqual(len(results), 1)
+            self.assertEqual(str(results[0].purl), "pkg:conan/libfoo@1.0")
+
+    def test_alternate_purls_skip_primary_duplicate(self):
+        """An alternate PURL that matches the primary PURL is not emitted."""
+        builder = CycloneDxBuilder(expand_alternate_purls=True)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_dir_path = pathlib.Path(temp_dir)
+            dep_source_dir = temp_dir_path / "dep"
+            dep_source_dir.mkdir()
+            canonical = Component(
+                name="libfoo",
+                type=ComponentType.LIBRARY,
+                bom_ref="riot-sbom-package-dep-dep",
+                version="1.0",
+            )
+            package_info = PackageInfo(
+                name="libfoo",
+                version="1.0",
+                licenses=None,
+                copyrights=None,
+                download_url=None,
+                authors=None,
+                source_dir=dep_source_dir,
+                supplier=None,
+                purl="pkg:deb/ubuntu/libfoo@1.0",
+                alternate_purls=["pkg:deb/ubuntu/libfoo@1.0"],
+            )
+            results = builder._make_alternate_purl_components(canonical, package_info)
+            self.assertEqual(len(results), 0)
 
 
 if __name__ == "__main__":

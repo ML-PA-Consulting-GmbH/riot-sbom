@@ -29,6 +29,7 @@ class PackageInfo:
     copyrights: List[CopyrightInfo] | None
     purl: str | None = None
     cpe: str | None = None
+    alternate_purls: list[str] | None = None
     # Provenance fields for derivative distro tracking (system packages only)
     host_distro_id: str | None = None
     origin_distro_id: str | None = None

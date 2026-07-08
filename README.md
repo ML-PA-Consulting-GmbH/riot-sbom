@@ -59,6 +59,48 @@ riot-sbom --load-app-info <path/to/app_info.pkl> \
 
 This will write the output to `<path/to/outfilebase>.sbom.cyclonedx.json`.
 
+The `cyclonedx-generator` plugin supports the following options:
+
+| Option | Default | Description |
+|---|---|---|
+| `--cyclonedx-generator:schema-version` | `1.6` | CycloneDX schema version (`1.6` or `1.7`). |
+| `--cyclonedx-generator:include-files` | off | Include file-level components in the BOM. |
+| `--cyclonedx-generator:expand-alternate-purls` | off | Scanner mode: emit one synthetic duplicate component per alternate PURL for each non-root library package (see below). |
+| `--cyclonedx-generator:alternate-purl-name-style` | `ecosystem-project` | Naming style for synthetic alternate-PURL components. |
+
+### Canonical mode (default)
+
+Each package appears exactly once in the BOM. If a `PackageInfo` has `alternate_purls` set, those values are serialised as `riot_sbom:alternate-purl` custom properties on the canonical component, preserving the alternate identities without duplicating the component.
+
+### Scanner mode (`--cyclonedx-generator:expand-alternate-purls`)
+
+In scanner mode each non-root library component with alternate PURLs also gets one synthetic duplicate component per alternate PURL. The duplicate:
+
+- has its `purl` set to the alternate value,
+- is named with a suffix derived from the PURL's ecosystem and namespace (e.g. `libfoo [conan]` or `libfoo [deb/ubuntu]` with the default `ecosystem-project` style),
+- carries a `riot_sbom:canonical-bom-ref` property pointing back to the canonical component,
+- is registered as an additional root dependency.
+
+The root application component is never duplicated.
+
+Example — emit a scanner-mode BOM:
+
+```console
+riot-sbom --load-app-info <path/to/app_info.pkl> \
+    --output-file-prefix <path/to/outfilebase> \
+    --plugin-pipeline system-package-provider infer-file-data-from-package cyclonedx-generator \
+    --cyclonedx-generator:expand-alternate-purls
+```
+
+Example — emit a v1.7 BOM with file-level components:
+riot-sbom --load-app-info <path/to/app_info.pkl> \
+    --output-file-prefix <path/to/outfilebase> \
+    --plugin-pipeline copyrights-scanner authors-scanner spdx-identifiers-scanner \
+                      system-package-provider infer-file-data-from-package cyclonedx-generator \
+    --cyclonedx-generator:schema-version 1.7 \
+    --cyclonedx-generator:include-files
+```
+
 All tasks can be executed in one go of course, without saving
 intermediate information to the file system:
 
