@@ -46,22 +46,40 @@ def derive_purl(
 def derive_debian_purl(
     name: str,
     version: Optional[str] = None,
+    namespace: Optional[str] = "ubuntu",
+    distro: Optional[str] = None,
+    arch: Optional[str] = None,
 ) -> Optional[str]:
     """
     Derive a Debian-style PURL for system packages.
-    Format: pkg:deb/<name>@<version> or pkg:deb/<name> if version is missing.
+    Format: pkg:deb/<namespace>/<name>@<version>?distro=<distro>&arch=<arch>
+    Qualifiers are included only when provided.
 
     :param name: Package name (Debian package name)
     :param version: Package version (optional)
+    :param namespace: Distro namespace (defaults to ubuntu)
+    :param distro: Distro qualifier value (optional)
+    :param arch: Architecture qualifier value (optional)
     :return: PURL string
     """
     if not name:
         return None
 
+    resolved_namespace = namespace or "ubuntu"
+    purl = f"pkg:deb/{resolved_namespace}/{name}"
     if version:
-        return f"pkg:deb/{name}@{version}"
-    else:
-        return f"pkg:deb/{name}"
+        purl += f"@{version}"
+
+    qualifiers = []
+    if distro:
+        qualifiers.append(("distro", urllib.parse.quote(distro, safe="")))
+    if arch:
+        qualifiers.append(("arch", urllib.parse.quote(arch, safe="")))
+    if qualifiers:
+        qualifier_str = "&".join(f"{key}={value}" for key, value in qualifiers)
+        purl += f"?{qualifier_str}"
+
+    return purl
 
 
 def _derive_vcs_purl(
@@ -225,12 +243,44 @@ class TestPurlDerivation(unittest.TestCase):
     def test_derive_debian_purl_with_version(self):
         """Test Debian PURL derivation with version."""
         purl = derive_debian_purl("bash", "5.1.16")
-        self.assertEqual(purl, "pkg:deb/bash@5.1.16")
+        self.assertEqual(purl, "pkg:deb/ubuntu/bash@5.1.16")
 
     def test_derive_debian_purl_without_version(self):
         """Test Debian PURL derivation without version."""
         purl = derive_debian_purl("bash", None)
-        self.assertEqual(purl, "pkg:deb/bash")
+        self.assertEqual(purl, "pkg:deb/ubuntu/bash")
+
+    def test_derive_debian_purl_with_namespace(self):
+        """Test Debian PURL derivation with explicit namespace."""
+        purl = derive_debian_purl("bash", "5.1.16", namespace="debian")
+        self.assertEqual(purl, "pkg:deb/debian/bash@5.1.16")
+
+    def test_derive_debian_purl_with_distro_and_arch(self):
+        """Test Debian PURL derivation with CVE-relevant qualifiers."""
+        purl = derive_debian_purl(
+            "bash",
+            "5.1.16",
+            namespace="ubuntu",
+            distro="ubuntu-22.04",
+            arch="amd64",
+        )
+        self.assertEqual(
+            purl,
+            "pkg:deb/ubuntu/bash@5.1.16?distro=ubuntu-22.04&arch=amd64",
+        )
+
+    def test_derive_debian_purl_with_url_encoded_qualifiers(self):
+        """Test qualifier URL-encoding for Debian PURLs."""
+        purl = derive_debian_purl(
+            "bash",
+            "5.1.16",
+            distro="ubuntu 22.04",
+            arch="x86/64",
+        )
+        self.assertEqual(
+            purl,
+            "pkg:deb/ubuntu/bash@5.1.16?distro=ubuntu%2022.04&arch=x86%2F64",
+        )
 
     def test_derive_debian_purl_empty_name(self):
         """Test Debian PURL derivation with empty name returns None."""

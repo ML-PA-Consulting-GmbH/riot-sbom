@@ -52,3 +52,20 @@ class Plugin:
         :return: The processed application information.
         """
         raise NotImplementedError("Subclasses must implement this method")
+
+    def get_cli_arguments(self) -> dict:
+        """
+        Returns a dict of plugin-specific CLI argument definitions.
+        Keys are argument names (without the plugin-name prefix), values are
+        dicts of kwargs accepted by argparse.ArgumentParser.add_argument().
+        Plugins override this to expose their own CLI options.
+        """
+        return {}
+
+    def configure(self, **kwargs) -> None:
+        """
+        Called after argument parsing to pass CLI-supplied configuration to
+        the plugin.  Keyword names match the argument names returned by
+        get_cli_arguments() with hyphens replaced by underscores.
+        Plugins override this to capture their runtime configuration.
+        """

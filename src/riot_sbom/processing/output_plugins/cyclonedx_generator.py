@@ -55,9 +55,11 @@ logger = logging.getLogger(__name__)
 
 
 class CycloneDxBuilder:
-    def __init__(self):
+    def __init__(self, schema_version: str = "1.6", include_files: bool = False):
         self._license_factory = LicenseFactory()
         self._package_components: dict[PackageReference, Component] = {}
+        self._schema_version = schema_version
+        self._include_files = include_files
 
     def build(self, app_info: AppInfo) -> Bom:
         app_package = app_info.packages[app_info.app_package_ref]
@@ -96,6 +98,8 @@ class CycloneDxBuilder:
         root_dependencies: list[Component] = list(self._package_components.values())
         package_file_dependencies: dict[PackageReference, list[Component]] = {}
         for file_info in app_info.files:
+            if not self._include_files:
+                break
             package_info = app_info.packages.get(file_info.package) if file_info.package else None
             component = self._make_file_component(file_info, package_info)
             bom.components.add(component)
@@ -137,11 +141,18 @@ class CycloneDxBuilder:
             properties.append(
                 Property(name="riot_sbom:source_dir", value=package_info.source_dir.as_posix())
             )
+        if package_info.host_distro_id:
+            properties.append(Property(name="riot_sbom:host_distro_id", value=package_info.host_distro_id))
+        if package_info.origin_distro_id:
+            properties.append(Property(name="riot_sbom:origin_distro_id", value=package_info.origin_distro_id))
+        if package_info.host_distro_name:
+            properties.append(Property(name="riot_sbom:host_distro_name", value=package_info.host_distro_name))
         return Component(
             name=package_info.name,
             type=component_type,
             bom_ref=self._make_bom_ref("package", package_info.name, package_info.source_dir),
             version=package_info.version,
+            cpe=package_info.cpe or None,
             purl=self._derive_purl(package_info),
             supplier=self._make_supplier(package_info.supplier),
             authors=self._make_contacts(package_info.authors),
@@ -362,17 +373,49 @@ class CycloneDxBuilder:
 
 
 class CycloneDxGenerator(Plugin):
+    def __init__(self):
+        self._schema_version: str = "1.6"
+        self._include_files: bool = False
+
     def get_name(self):
         return "cyclonedx-generator"
 
     def get_description(self):
         return "Writes a CycloneDX SBOM in JSON format."
 
+    def get_cli_arguments(self) -> dict:
+        return {
+            "schema-version": {
+                "choices": ["1.6", "1.7"],
+                "default": "1.6",
+                "help": "CycloneDX schema version to use (default: 1.6).",
+            },
+            "include-files": {
+                "action": "store_true",
+                "default": False,
+                "help": "Include file-level components in the CycloneDX BOM.",
+            },
+        }
+
+    def configure(self, **kwargs) -> None:
+        if "schema_version" in kwargs:
+            self._schema_version = kwargs["schema_version"]
+        if "include_files" in kwargs:
+            self._include_files = bool(kwargs["include_files"])
+
     def run(self, app_info: AppInfo, output_file_prefix: pathlib.Path | None) -> AppInfo:
         logger.info("Generating CycloneDX document")
-        builder = CycloneDxBuilder()
+        _schema_version_map = {
+            "1.6": SchemaVersion.V1_6,
+            "1.7": SchemaVersion.V1_7,
+        }
+        schema_version_enum = _schema_version_map.get(self._schema_version, SchemaVersion.V1_6)
+        builder = CycloneDxBuilder(
+            schema_version=self._schema_version,
+            include_files=self._include_files,
+        )
         bom = builder.build(app_info)
-        outputter = make_outputter(bom, OutputFormat.JSON, SchemaVersion.V1_7)
+        outputter = make_outputter(bom, OutputFormat.JSON, schema_version_enum)
         output_file = (
             output_file_prefix.with_suffix(".sbom.cyclonedx.json")
             if output_file_prefix
@@ -507,6 +550,7 @@ class TestCycloneDxGenerator(unittest.TestCase):
 
             output = json.loads(output_file.read_text())
             self.assertEqual(output["bomFormat"], "CycloneDX")
+            self.assertEqual(output["specVersion"], "1.6")
             self.assertEqual(output["metadata"]["component"]["type"], "application")
             self.assertEqual(output["metadata"]["component"]["name"], "example-app")
             self.assertEqual(output["metadata"]["component"]["purl"], "pkg:generic/example-app@1.0.0")
@@ -516,14 +560,177 @@ class TestCycloneDxGenerator(unittest.TestCase):
             }
             component_names = set(components_by_name)
             self.assertIn("example-pkg", component_names)
-            self.assertIn("main.c", component_names)
-            self.assertIn("lib.c", component_names)
+            # File components are excluded by default
+            self.assertNotIn("main.c", component_names)
+            self.assertNotIn("lib.c", component_names)
             self.assertEqual(
                 components_by_name["example-pkg"]["purl"],
                 "pkg:github/example-org/example-pkg@2.0.0",
             )
-            self.assertNotIn("purl", components_by_name["main.c"])
-            self.assertNotIn("purl", components_by_name["lib.c"])
+
+    def test_cyclonedx_generator_with_files(self):
+        """File components appear when include_files is enabled."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_dir_path = pathlib.Path(temp_dir)
+            app_source_dir = temp_dir_path / "app"
+            dep_source_dir = temp_dir_path / "dep"
+            app_source_dir.mkdir()
+            dep_source_dir.mkdir()
+
+            app_package = PackageInfo(
+                name="example-app",
+                version="1.0.0",
+                licenses=None,
+                copyrights=None,
+                download_url=None,
+                authors=None,
+                source_dir=app_source_dir,
+                supplier=None,
+                purl="pkg:generic/example-app@1.0.0",
+            )
+            dependency_package = PackageInfo(
+                name="example-pkg",
+                version="2.0.0",
+                licenses=None,
+                copyrights=None,
+                download_url=None,
+                authors=None,
+                source_dir=dep_source_dir,
+                supplier=None,
+            )
+            app_info = AppInfo(
+                build_dir=temp_dir_path / "build",
+                app_package_ref=PackageReference.from_package_info(app_package),
+                riot_package_ref=None,
+                board_package_ref=None,
+                packages={
+                    PackageReference.from_package_info(app_package): app_package,
+                    PackageReference.from_package_info(dependency_package): dependency_package,
+                },
+                files=[],
+            )
+            app_file = app_source_dir / "main.c"
+            app_file.write_text("int main(void) { return 0; }\n")
+            dep_file = dep_source_dir / "lib.c"
+            dep_file.write_text("void lib(void) {}\n")
+            app_info.files.append(
+                FileInfo(
+                    path=app_file,
+                    package=app_info.app_package_ref,
+                    licenses=None,
+                    copyrights=None,
+                    authors=None,
+                )
+            )
+            app_info.files.append(
+                FileInfo(
+                    path=dep_file,
+                    package=PackageReference.from_package_info(dependency_package),
+                    licenses=None,
+                    copyrights=None,
+                    authors=None,
+                )
+            )
+
+            plugin = CycloneDxGenerator()
+            plugin.configure(schema_version="1.6", include_files=True)
+            output_file_prefix = temp_dir_path / "test_output_with_files"
+            plugin.run(app_info, output_file_prefix)
+
+            output = json.loads(
+                output_file_prefix.with_suffix(".sbom.cyclonedx.json").read_text()
+            )
+            component_names = {c["name"] for c in output.get("components", [])}
+            self.assertIn("main.c", component_names)
+            self.assertIn("lib.c", component_names)
+
+    def test_cyclonedx_schema_version_override(self):
+        """Schema version can be overridden to 1.7 via configure()."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_dir_path = pathlib.Path(temp_dir)
+            app_source_dir = temp_dir_path / "app"
+            app_source_dir.mkdir()
+            app_package = PackageInfo(
+                name="my-app",
+                version="1.0.0",
+                licenses=None,
+                copyrights=None,
+                download_url=None,
+                authors=None,
+                source_dir=app_source_dir,
+                supplier=None,
+                purl="pkg:generic/my-app@1.0.0",
+            )
+            app_info = AppInfo(
+                build_dir=temp_dir_path / "build",
+                app_package_ref=PackageReference.from_package_info(app_package),
+                riot_package_ref=None,
+                board_package_ref=None,
+                packages={PackageReference.from_package_info(app_package): app_package},
+                files=[],
+            )
+            plugin = CycloneDxGenerator()
+            plugin.configure(schema_version="1.7", include_files=False)
+            output_file_prefix = temp_dir_path / "test_v17"
+            plugin.run(app_info, output_file_prefix)
+            output = json.loads(
+                output_file_prefix.with_suffix(".sbom.cyclonedx.json").read_text()
+            )
+            self.assertEqual(output["specVersion"], "1.7")
+
+    def test_cyclonedx_cpe_in_output(self):
+        """Packages with a cpe field emit it in the CycloneDX component."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_dir_path = pathlib.Path(temp_dir)
+            app_source_dir = temp_dir_path / "app"
+            sys_source_dir = pathlib.Path("/")
+            app_source_dir.mkdir()
+            app_package = PackageInfo(
+                name="my-app",
+                version="1.0.0",
+                licenses=None,
+                copyrights=None,
+                download_url=None,
+                authors=None,
+                source_dir=app_source_dir,
+                supplier=None,
+                purl="pkg:generic/my-app@1.0.0",
+            )
+            sys_package = PackageInfo(
+                name="libc6",
+                version="2.39",
+                licenses=None,
+                copyrights=None,
+                download_url=None,
+                authors=None,
+                source_dir=sys_source_dir,
+                supplier="Ubuntu",
+                purl="pkg:deb/ubuntu/libc6@2.39",
+                cpe="cpe:2.3:a:ubuntu:libc6:2.39:*:*:*:*:*:*:*",
+            )
+            app_info = AppInfo(
+                build_dir=temp_dir_path / "build",
+                app_package_ref=PackageReference.from_package_info(app_package),
+                riot_package_ref=None,
+                board_package_ref=None,
+                packages={
+                    PackageReference.from_package_info(app_package): app_package,
+                    PackageReference.from_package_info(sys_package): sys_package,
+                },
+                files=[],
+            )
+            plugin = CycloneDxGenerator()
+            output_file_prefix = temp_dir_path / "test_cpe"
+            plugin.run(app_info, output_file_prefix)
+            output = json.loads(
+                output_file_prefix.with_suffix(".sbom.cyclonedx.json").read_text()
+            )
+            components_by_name = {c["name"]: c for c in output.get("components", [])}
+            self.assertIn("libc6", components_by_name)
+            self.assertEqual(
+                components_by_name["libc6"].get("cpe"),
+                "cpe:2.3:a:ubuntu:libc6:2.39:*:*:*:*:*:*:*",
+            )
 
     def test_derive_purl_prefers_github_inference(self):
         builder = CycloneDxBuilder()
@@ -543,6 +750,68 @@ class TestCycloneDxGenerator(unittest.TestCase):
 
         self.assertIsNotNone(purl)
         self.assertEqual(str(purl), "pkg:github/example-org/example-pkg@2.0.0")
+
+    def test_provenance_properties_serialized_in_cyclonedx(self):
+        """PackageInfo provenance fields appear as properties in CycloneDX output."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_dir_path = pathlib.Path(temp_dir)
+            app_source_dir = temp_dir_path / "app"
+            sys_source_dir = pathlib.Path("/")
+            app_source_dir.mkdir()
+
+            app_package = PackageInfo(
+                name="my-app",
+                version="1.0.0",
+                licenses=None,
+                copyrights=None,
+                download_url=None,
+                authors=None,
+                source_dir=app_source_dir,
+                supplier="Ubuntu",
+                purl="pkg:generic/my-app@1.0.0",
+            )
+            sys_package = PackageInfo(
+                name="libc6",
+                version="2.39-0ubuntu8.7",
+                licenses=None,
+                copyrights=None,
+                download_url=None,
+                authors=None,
+                source_dir=sys_source_dir,
+                supplier="Ubuntu",
+                purl="pkg:deb/ubuntu/libc6@2.39-0ubuntu8.7?distro=ubuntu-24.04&arch=amd64",
+                host_distro_id="neon",
+                origin_distro_id="ubuntu",
+                host_distro_name="KDE neon",
+            )
+            app_info = AppInfo(
+                build_dir=temp_dir_path / "build",
+                app_package_ref=PackageReference.from_package_info(app_package),
+                riot_package_ref=None,
+                board_package_ref=None,
+                packages={
+                    PackageReference.from_package_info(app_package): app_package,
+                    PackageReference.from_package_info(sys_package): sys_package,
+                },
+                files=[],
+            )
+
+            plugin = CycloneDxGenerator()
+            output_file_prefix = temp_dir_path / "test_provenance"
+            plugin.run(app_info, output_file_prefix)
+
+            output = json.loads(
+                (output_file_prefix.with_suffix(".sbom.cyclonedx.json")).read_text()
+            )
+            components_by_name = {c["name"]: c for c in output.get("components", [])}
+            self.assertIn("libc6", components_by_name)
+            props = {
+                p["name"]: p["value"]
+                for p in components_by_name["libc6"].get("properties", [])
+            }
+            self.assertEqual(props.get("riot_sbom:host_distro_id"), "neon")
+            self.assertEqual(props.get("riot_sbom:origin_distro_id"), "ubuntu")
+            self.assertEqual(props.get("riot_sbom:host_distro_name"), "KDE neon")
 
 
 if __name__ == "__main__":

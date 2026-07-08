@@ -28,6 +28,11 @@ class PackageInfo:
     licenses: List[LicenseInfo] | None
     copyrights: List[CopyrightInfo] | None
     purl: str | None = None
+    cpe: str | None = None
+    # Provenance fields for derivative distro tracking (system packages only)
+    host_distro_id: str | None = None
+    origin_distro_id: str | None = None
+    host_distro_name: str | None = None
 
 
 class PackageReference:
